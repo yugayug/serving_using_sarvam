@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Activity, ArrowDownLeft, ArrowRight, Bell, CalendarDays, Check, CheckCircle2, ChevronDown,
-  Clock3, Coffee, Heart, Home, Leaf, Mic, MoreHorizontal,
+  Clock3, Coffee, Heart, Home, Leaf, Mic, MoreHorizontal, Volume2,
   Plus, Send, ShoppingBasket, Sparkles, Stethoscope, Sun, TrendingDown, Wallet
 } from 'lucide-react';
 
@@ -51,11 +51,13 @@ const sections = [
 function App() {
   const [data, setData] = useState(starter);
   const [hydrated, setHydrated] = useState(false);
+  const [view, setView] = useState('voice');
   const [section, setSection] = useState('home');
   const [message, setMessage] = useState('');
   const [note, setNote] = useState('');
   const [assistant, setAssistant] = useState({ busy: false, text: '' });
   const [voiceState, setVoiceState] = useState('idle');
+  const [speaking, setSpeaking] = useState(false);
   const [sarvamReady, setSarvamReady] = useState(false);
   const [languageCode, setLanguageCode] = useState('en-IN');
   const recorderRef = useRef(null);
@@ -77,19 +79,37 @@ function App() {
   const checkedGroceries = data.groceries.filter(i => i.checked).length;
   const dateLabel = new Intl.DateTimeFormat('en-IN', { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date());
 
-  const showReply = async (text, voice = false) => {
-    setAssistant({ busy: false, text });
-    if (voice && sarvamReady) {
+  const speakReply = async (text) => {
+    if (!text?.trim()) return;
+    setSpeaking(true);
+    if (sarvamReady) {
       try {
         const response = await fetch('/api/speak', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, languageCode }) });
         const result = await response.json();
-        if (result.audio) {
+        if (response.ok && result.audio) {
           audioRef.current?.pause();
-          audioRef.current = new Audio(`data:audio/wav;base64,${result.audio}`);
-          audioRef.current.play();
+          const audio = new Audio(`data:audio/wav;base64,${result.audio}`);
+          audioRef.current = audio;
+          audio.onended = () => setSpeaking(false);
+          audio.onerror = () => setSpeaking(false);
+          await audio.play();
+          return;
         }
-      } catch { /* text reply remains available */ }
+      } catch { /* Fall back to the browser voice if Sarvam audio cannot play. */ }
     }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = languageCode;
+      utterance.onend = () => setSpeaking(false);
+      utterance.onerror = () => setSpeaking(false);
+      window.speechSynthesis.speak(utterance);
+    } else setSpeaking(false);
+  };
+
+  const showReply = async (text) => {
+    setAssistant({ busy: false, text });
+    await speakReply(text);
   };
 
   const addGrocery = (name, qty = '1') => {
@@ -144,6 +164,7 @@ function App() {
             case 'bargain':
             case 'question': break;
           }
+          setSection('home'); setView('dashboard');
           await showReply(intent.reply || 'Done — I updated the family dashboard.', cameFromVoice);
           return;
         }
@@ -199,6 +220,7 @@ function App() {
         reply = 'I can add groceries, meals, reminders, expenses, and commute notes. Try “add spinach to groceries” or “spent 250 on lunch”.';
       }
     }
+    setSection('home'); setView('dashboard');
     await showReply(reply, cameFromVoice);
   };
 
@@ -257,9 +279,9 @@ function App() {
     set('notes', list => [...list, { id: Date.now(), by: data.profile, text: note.trim(), time: now }]); setNote('');
   };
 
-  return <div className="app-shell">
+  return <div className={`app-shell ${view === 'voice' ? 'voice-home-mode' : ''}`}>
     <aside className="sidebar">
-      <a className="brand" href="#home" onClick={() => setSection('home')}><span className="brand-icon"><Sun size={19} /></span><span>daylight<span className="brand-dot">.</span></span></a>
+      <a className="brand" href="#home" onClick={() => { setSection('home'); setView('voice'); }}><span className="brand-icon"><Sun size={19} /></span><span>daylight<span className="brand-dot">.</span></span></a>
       <div className="household"><div className="house-avatar"><Home size={16} /></div><div><span className="eyebrow">YOUR HOUSEHOLD</span><strong>The Kumar home</strong></div><ChevronDown size={15} className="muted" /></div>
       <div className="nav-label">Workspace</div>
       <nav>{sections.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${section === id ? 'active' : ''}`} onClick={() => setSection(id)}><Icon size={17} /><span>{label}</span>{id === 'care' && pendingMeds.length > 0 && <span className="nav-count">{pendingMeds.length}</span>}</button>)}</nav>
@@ -271,9 +293,10 @@ function App() {
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="breadcrumb">The Kumar home <span>/</span> <strong>{sections.find(s => s.id === section)?.label}</strong></div><div className="top-actions"><span className={`sarvam-status ${sarvamReady ? 'online' : ''}`}><span />{sarvamReady ? 'Sarvam live' : 'Demo mode'}</span><label className="language-picker"><span>VOICE</span><select aria-label="Conversation language" value={languageCode} onChange={e => setLanguageCode(e.target.value)}>{languages.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><ChevronDown size={13} /></label><span className="today-date"><CalendarDays size={15} /> {dateLabel}</span><button className="icon-button notification" aria-label="Notifications"><Bell size={17} /><i /></button><div className={`avatar small ${data.profile === 'Amma' ? 'peach' : 'blue'}`}>{data.profile === 'Amma' ? 'A' : 'R'}</div></div></header>
+      <header className="topbar"><div className={view === 'voice' ? 'top-brand' : 'breadcrumb'}>{view === 'voice' ? <><span className="brand-icon"><Sun size={17} /></span><strong>daylight<span className="brand-dot">.</span></strong><span className="top-brand-tag">FAMILY, IN SYNC</span></> : <>The Kumar home <span>/</span> <strong>{sections.find(s => s.id === section)?.label}</strong></>}</div><div className="top-actions"><span className={`sarvam-status ${sarvamReady ? 'online' : ''}`}><span />{sarvamReady ? 'Sarvam live' : 'Demo mode'}</span><label className="language-picker"><span>VOICE</span><select aria-label="Conversation language" value={languageCode} onChange={e => setLanguageCode(e.target.value)}>{languages.map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select><ChevronDown size={13} /></label>{view === 'voice' ? <button className="dashboard-link" onClick={() => setView('dashboard')}>Open dashboard <ArrowRight size={14} /></button> : <button className="dashboard-link" onClick={() => setView('voice')}><Mic size={14} /> Voice home</button>}<span className="today-date"><CalendarDays size={15} /> {dateLabel}</span><div className={`avatar small ${data.profile === 'Amma' ? 'peach' : 'blue'}`}>{data.profile === 'Amma' ? 'A' : 'R'}</div></div></header>
 
       <div className="content">
+        {view === 'voice' ? <VoiceHome voiceState={voiceState} assistant={assistant} startRecording={startRecording} stopRecording={() => recorderRef.current?.stop()} runCommand={handleCommand} sarvamReady={sarvamReady} speakReply={speakReply} speaking={speaking} /> : <>
         {section === 'home' && <>
           <div className="welcome-row"><div><div className="eyebrow sun-eyebrow"><Sun size={13} /> A FRESH START</div><h1>Good morning, {data.profile === 'Amma' ? 'Amma' : 'Arjun'}<span className="wave">✳</span></h1><p className="subtitle">Here’s your family’s day, all in one place.</p></div><button className="soft-button" onClick={() => setSection('meals')}><CalendarDays size={15} /> Plan your week</button></div>
           <div className="stats-grid">
@@ -303,10 +326,27 @@ function App() {
         {section === 'groceries' && <Groceries data={data} set={set} addGrocery={addGrocery} languageCode={languageCode} />}
         {section === 'care' && <Care data={data} set={set} addMed={addMed} />}
         {section === 'money' && <Money data={data} addExpense={addExpense} total={totalSpent} />}
+        </>}
       </div>
-      <section className="assistant-banner voice-dock"><div className="assistant-orb"><Sparkles size={19} /></div><div className="assistant-prompt"><div><span className="eyebrow">DAYLIGHT VOICE ASSISTANT</span><strong>{voiceState === 'recording' ? 'Listening… tap to finish' : 'Say what you need, in your language'}</strong></div><form onSubmit={e => { e.preventDefault(); handleCommand(message); }}><input value={message} onChange={e => setMessage(e.target.value)} placeholder="“Add tomatoes”, “plan dinner”, “spent 250 on lunch”…" aria-label="Ask Daylight by voice or text" /><button type="button" className={`mic-button ${voiceState === 'recording' ? 'recording' : ''}`} onClick={voiceState === 'recording' ? () => recorderRef.current?.stop() : startRecording} aria-label={voiceState === 'recording' ? 'Stop recording' : 'Start voice command'}><Mic size={16} /></button><button className="send-button" aria-label="Send command" disabled={!message.trim() || assistant.busy}><ArrowRight size={17} /></button></form>{(assistant.busy || assistant.text) && <div className="assistant-reply">{assistant.busy ? <><span className="typing" /> Thinking…</> : <><Sparkles size={13} /> {assistant.text}</>}</div>}<div className="demo-prompts"><span>TRY SAYING</span><button onClick={() => handleCommand('Add spinach to groceries')}>Add groceries</button><button onClick={() => handleCommand('Plan dinner tomorrow: dal khichdi')}>Plan dinner</button><button onClick={() => handleCommand('Spent 250 on fruit')}>Log spending</button><button onClick={() => handleCommand('Remind me to take vitamins at 8 PM')}>Set reminder</button></div></div></section>
+      {view === 'dashboard' && <section className="assistant-banner voice-dock"><div className="assistant-orb"><Sparkles size={19} /></div><div className="assistant-prompt"><div><span className="eyebrow">DAYLIGHT VOICE ASSISTANT</span><strong>{voiceState === 'recording' ? 'Listening… tap to finish' : 'Say what you need, in your language'}</strong></div><form onSubmit={e => { e.preventDefault(); handleCommand(message); }}><input value={message} onChange={e => setMessage(e.target.value)} placeholder="“Add tomatoes”, “plan dinner”, “spent 250 on lunch”…" aria-label="Ask Daylight by voice or text" /><button type="button" className={`mic-button ${voiceState === 'recording' ? 'recording' : ''}`} onClick={voiceState === 'recording' ? () => recorderRef.current?.stop() : startRecording} aria-label={voiceState === 'recording' ? 'Stop recording' : 'Start voice command'}><Mic size={16} /></button><button className="send-button" aria-label="Send command" disabled={!message.trim() || assistant.busy}><ArrowRight size={17} /></button></form>{(assistant.busy || assistant.text) && <div className="assistant-reply">{assistant.busy ? <><span className="typing" /> Thinking…</> : <><Sparkles size={13} /> <span>{assistant.text}</span><button className="reply-speak" onClick={() => speakReply(assistant.text)} aria-label="Speak reply">{speaking ? 'Speaking…' : <Volume2 size={15} />}</button></>}</div>}<div className="demo-prompts"><span>TRY SAYING</span><button onClick={() => handleCommand('Add spinach to groceries')}>Add groceries</button><button onClick={() => handleCommand('Plan dinner tomorrow: dal khichdi')}>Plan dinner</button><button onClick={() => handleCommand('Spent 250 on fruit')}>Log spending</button><button onClick={() => handleCommand('Remind me to take vitamins at 8 PM')}>Set reminder</button></div></div></section>}
     </main>
   </div>;
+}
+
+function VoiceHome({ voiceState, assistant, startRecording, stopRecording, runCommand, sarvamReady, speakReply, speaking }) {
+  const recording = voiceState === 'recording';
+  const working = voiceState === 'transcribing' || assistant.busy;
+  return <section className="voice-landing">
+    <div className="voice-copy"><span className="voice-kicker"><span className="kicker-dot" /> YOUR FAMILY’S VOICE COMPANION</span><h1>Home runs on<br /><em>little conversations.</em></h1><p>Tell Daylight what your family needs. Meals, groceries, reminders, and more — handled with one simple voice command.</p>
+      <div className="voice-language-note"><span className="language-globe">◉</span> Understands your language <span className="language-separator">·</span> Speaks back to you</div>
+    </div>
+    <div className="voice-orbit-wrap"><div className={`voice-orbit orbit-one ${recording ? 'active' : ''}`} /><div className={`voice-orbit orbit-two ${recording ? 'active' : ''}`} /><div className={`voice-orbit orbit-three ${recording ? 'active' : ''}`} /><button className={`hero-mic ${recording ? 'recording' : ''} ${working ? 'working' : ''}`} onClick={recording ? stopRecording : startRecording} aria-label={recording ? 'Stop listening' : 'Start talking'}><span className="hero-mic-inner">{working ? <span className="hero-loader" /> : <Mic size={31} strokeWidth={1.7} />}</span></button><span className="orbit-spark spark-a">✳</span><span className="orbit-spark spark-b">✦</span></div>
+    <div className="voice-action"><span className="voice-action-title">{recording ? 'Listening — tap the mic when you’re done' : working ? 'Daylight is working on it…' : sarvamReady ? 'Tap the mic and tell me what you need' : 'Add your Sarvam key to turn on the microphone'}</span><span className="voice-action-sub">{sarvamReady ? 'Your voice stays in the moment. No menus to navigate.' : 'You can still explore the dashboard in demo mode.'}</span>
+      {assistant.text && <div className="voice-response"><Sparkles size={15} /><span>{assistant.text}</span><button className="reply-speak" onClick={() => speakReply(assistant.text)} aria-label="Speak reply">{speaking ? 'Speaking…' : <Volume2 size={16} />}</button></div>}
+    </div>
+    <div className="voice-examples"><span>TRY SAYING</span><button onClick={() => runCommand('Add spinach to groceries')}>“Add spinach to groceries”</button><button onClick={() => runCommand('Plan dinner tomorrow: dal khichdi')}>“Plan dinner tomorrow”</button><button onClick={() => runCommand('Spent 250 on fruit')}>“I spent 250 on fruit”</button></div>
+    <div className="voice-bottomline"><div className="mini-family"><span className="avatar peach">A</span><span className="avatar blue">R</span><span>Made for the whole household</span></div><span className="voice-sarvam"><span /> Powered by Sarvam</span></div>
+  </section>;
 }
 
 function StatCard({ icon: Icon, iconClass, label, value, caption, onClick }) {
